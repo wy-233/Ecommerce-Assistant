@@ -1,0 +1,21 @@
+order_id,customer_name_masked,customer_country,order_status,payment_status,fulfillment_status,currency,total_amount,created_at,updated_at,is_demo
+1001,C***,CN,in_transit,paid,fulfilled,CNY,528.00,2026-01-10 09:12:00,2026-01-12 15:30:00,DEMO
+1002,L***,US,delivered,paid,fulfilled,USD,1299.00,2026-01-08 11:45:00,2026-01-11 09:20:00,DEMO
+1003,A***,DE,pending_payment,unpaid,pending,EUR,799.00,2026-01-12 13:10:00,2026-01-12 13:10:00,DEMO
+1004,R***,AU,canceled,refunded,canceled,AUD,168.00,2026-01-14 18:00:00,2026-01-15 08:15:00,DEMO
+1005,M***,SG,in_transit,paid,partial,SGD,640.00,2026-01-18 08:05:00,2026-01-22 10:00:00,DEMO
+1006,T***,JP,delivered,paid,fulfilled,JPY,11480.00,2026-01-16 12:00:00,2026-01-22 17:40:00,DEMO
+1007,S***,KR,pending_ship,paid,processing,KRW,58400.00,2026-01-25 10:25:00,2026-01-25 10:25:00,DEMO
+1008,N***,FR,in_transit,paid,fulfilled,EUR,392.00,2026-01-20 14:30:00,2026-01-23 16:55:00,DEMO
+1009,H***,UK,exception,paid,held,GBP,215.00,2026-01-22 09:00:00,2026-01-26 12:00:00,DEMO
+1010,K***,CA,delivered,paid,fulfilled,CAD,760.00,2026-01-17 07:40:00,2026-01-23 12:15:00,DEMO
+1011,P***,AU,pending_payment,unpaid,pending,AUD,290.00,2026-01-27 08:20:00,2026-01-27 08:20:00,DEMO
+1012,G***,US,in_transit,paid,fulfilled,USD,462.00,2026-01-26 10:10:00,2026-01-28 11:45:00,DEMO
+1013,E***,BR,delivered,paid,fulfilled,BRL,889.00,2026-01-15 16:35:00,2026-01-20 14:30:00,DEMO
+1014,V***,NL,canceled,refunded,canceled,EUR,220.00,2026-01-21 09:05:00,2026-01-22 11:12:00,DEMO
+1015,J***,ES,in_transit,paid,fulfilled,EUR,350.00,2026-01-29 15:05:00,2026-01-30 08:35:00,DEMO
+1016,Q***,TH,pending_ship,paid,processing,THB,1500.00,2026-01-30 12:15:00,2026-01-30 12:15:00,DEMO
+1017,B***,IT,exception,paid,in_transit,EUR,198.00,2026-02-01 08:00:00,2026-02-02 14:50:00,DEMO
+1018,X***,MY,delivered,paid,fulfilled,MYR,540.00,2026-02-03 09:55:00,2026-02-08 18:10:00,DEMO
+1019,Y***,ID,pending_payment,unpaid,pending,IDR,250000.00,2026-02-04 13:00:00,2026-02-04 13:00:00,DEMO
+1020,Z***,HK,in_transit,paid,fulfilled,HKD,620.00,2026-02-06 19:25:00,2026-02-09 09:45:00,DEMO

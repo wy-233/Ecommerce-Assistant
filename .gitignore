@@ -1,0 +1,14 @@
+.env
+*.sqlite
+*.db
+data/real/
+exports/
+customer_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
