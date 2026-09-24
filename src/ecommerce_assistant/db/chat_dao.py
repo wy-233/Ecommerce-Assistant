@@ -12,9 +12,14 @@ class ChatThreadDAO:
 
     def __init__(self, db_path: str | Path | None = None):
         self.db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-        init_db(self.db_path)
+        # 不在模块导入/DAO 构造阶段写数据库；首次真正访问时再确保 schema。
+        # FastAPI 服务启动时由 lifespan 提前完成统一初始化。
+        self._initialized = False
 
     def _connect(self) -> sqlite3.Connection:
+        if not self._initialized:
+            init_db(self.db_path)
+            self._initialized = True
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")

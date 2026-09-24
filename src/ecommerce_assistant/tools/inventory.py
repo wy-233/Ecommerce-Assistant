@@ -2,38 +2,36 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ecommerce_assistant.db.init_db import DEFAULT_DB_PATH, get_inventory_by_sku, init_db
-
-INVENTORY = {
-    "SKU-001": {"stock": 24, "status": "有货"},
-    "SKU-002": {"stock": 0, "status": "缺货"},
-    "SKU-003": {"stock": 7, "status": "库存充足"},
-}
+from ecommerce_assistant.schema.statuses import INVENTORY_STATUS_LABELS, label_of
+from ecommerce_assistant.tools.database import query_inventory_by_sku
 
 
-def _legacy_inventory_status(sku: str) -> str:
-    item = INVENTORY.get(sku)
-    if not item:
-        return f"未找到 SKU {sku}，请确认商品编码是否正确。"
-    return f"商品 {sku} 当前库存：{item['stock']} 件，状态：{item['status']}。"
+def _format_inventory_status_message(sku: str, result: dict) -> str:
+    if not result["ok"]:
+        return result["message"]
+
+    data = result["data"]
+    on_hand = data.get("on_hand", 0)
+    reserved = data.get("reserved", 0)
+    available = data.get("available", 0)
+    safety_stock = data.get("safety_stock", 0)
+    warehouse = data.get("warehouse_name") or "未知仓库"
+    status = label_of(INVENTORY_STATUS_LABELS, data.get("status"))
+    message = (
+        f"商品 {sku} 当前库存：{on_hand} 件，"
+        f"预留：{reserved} 件，"
+        f"可用：{available} 件，"
+        f"安全库存：{safety_stock} 件，"
+        f"仓库：{warehouse}，"
+        f"状态：{status}。"
+    )
+    if data.get("status_mismatch"):
+        stored = label_of(INVENTORY_STATUS_LABELS, data.get("stored_status"))
+        message += f"（注：库存表落库状态为 {stored}，与可用量规则不一致，请核查数据。）"
+    return message
 
 
 def get_inventory_status(sku: str, db_path: str | Path | None = None) -> str:
-    sku = str(sku).strip().upper()
-    database_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-
-    try:
-        init_db(database_path)
-        row = get_inventory_by_sku(sku, database_path)
-        if row:
-            available = row.get("available", 0)
-            on_hand = row.get("on_hand", 0)
-            warehouse = row.get("warehouse_name") or "未知仓库"
-            return (
-                f"商品 {sku} 当前库存：{on_hand} 件，"
-                f"可用库存：{available} 件，仓库：{warehouse}。"
-            )
-    except Exception:
-        pass
-
-    return _legacy_inventory_status(sku)
+    result = query_inventory_by_sku(sku=str(sku), db_path=db_path)
+    normalized_sku = str(sku).strip().upper()
+    return _format_inventory_status_message(normalized_sku, result)

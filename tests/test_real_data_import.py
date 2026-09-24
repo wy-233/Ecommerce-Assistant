@@ -162,6 +162,8 @@ def test_import_csv_files_success(tmp_path):
     assert result["orders_imported"] == 1
     assert result["order_items_imported"] == 1
     assert result["inventory_imported"] == 1
+    assert result["products_upserted"] == 1
+    assert result["warehouses_upserted"] == 1
     assert result["shipments_imported"] == 1
     assert result["tracking_events_imported"] == 1
 
@@ -169,6 +171,12 @@ def test_import_csv_files_success(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM order_items").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0] == 1
+        assert conn.execute("SELECT sku, product_name FROM products").fetchall() == [
+            ("SKU-001", "智能音箱")
+        ]
+        assert conn.execute(
+            "SELECT warehouse_id, warehouse_name FROM warehouses"
+        ).fetchall() == [("WH-001", "深圳仓")]
         assert conn.execute("SELECT COUNT(*) FROM shipments").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM tracking_events").fetchone()[0] == 1
 
@@ -295,6 +303,41 @@ def test_import_fails_for_missing_related_order_and_tracking_reference(tmp_path)
             shipments_path=valid_shipments,
             tracking_events_path=files["tracking_events"],
         )
+
+
+def test_import_fails_for_missing_sku_reference(tmp_path):
+    db_file = tmp_path / "missing_sku.db"
+    init_db(db_file)
+    files = _build_valid_inputs(tmp_path)
+    bad_order_items = files["order_items"].read_text(encoding="utf-8").replace("SKU-001", "SKU-404", 1)
+    files["order_items"].write_text(bad_order_items, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SKU关联不存在|SKU-404"):
+        import_csv_files(
+            db_path=db_file,
+            orders_path=files["orders"],
+            order_items_path=files["order_items"],
+            inventory_path=files["inventory"],
+        )
+
+
+def test_order_items_only_import_can_reference_existing_order_and_sku(tmp_path):
+    db_file = tmp_path / "existing_references.db"
+    init_db(db_file)
+    files = _build_valid_inputs(tmp_path)
+
+    import_csv_files(
+        db_path=db_file,
+        orders_path=files["orders"],
+        inventory_path=files["inventory"],
+    )
+    result = import_csv_files(db_path=db_file, order_items_path=files["order_items"])
+
+    assert result["order_items_imported"] == 1
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("SELECT order_id, sku FROM order_items").fetchall() == [
+            ("ORD-1001", "SKU-001")
+        ]
 
 
 def test_dry_run_does_not_write_db_and_duplicate_import_is_idempotent(tmp_path):

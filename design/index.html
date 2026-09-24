@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ecommerce Assistant · 分拣台</title>
+<meta name="description" content="跨境电商客服助手：把售后、订单、库存、物流的问题分拣到对应的处理链。" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap" />
+<style>
+  :root {
+    --paper: #E7E8E2;
+    --card: #FBFBF8;
+    --ink: #171A1F;
+    --ink-2: #3C4046;
+    --mute: #63675E;
+    --rule: #C7C9C0;
+
+    /* 四条道的编码色：色块与文字共用，均已通过 AA 文字对比度（>=4.5:1） */
+    --route-after: #C4400C;
+    --route-order: #2F4BC4;
+    --route-stock: #3F6B3A;
+    --route-ship: #8F6410;
+
+    --font-sans: "Archivo", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    --font-mono: "DM Mono", ui-monospace, Consolas, "Courier New", monospace;
+
+    --r-btn: 3px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    font-size: 15px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, p, ul, ol, dl, dd, figure { margin: 0; padding: 0; }
+  ul, ol { list-style: none; }
+  code { font-family: var(--font-mono); font-size: 1em; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  .shell { width: 100%; max-width: 1220px; margin: 0 auto; padding-inline: 26px; }
+
+  /* ---------- 运单头 ---------- */
+  .manifest { background: var(--card); border-bottom: 1px solid var(--ink); }
+  .manifest .shell {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: 10px 22px; min-height: 62px; padding-block: 11px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 11px; margin-right: auto; }
+  .brand strong { font-size: 17px; font-weight: 700; letter-spacing: -.018em; }
+  .brand span { font-size: 12px; color: var(--mute); }
+
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 20px; font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); }
+  .meta b { color: var(--mute); font-weight: 400; margin-right: 6px; }
+
+  .lamp { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
+  .lamp i { display: block; width: 8px; height: 8px; background: var(--route-stock); }
+
+  /* ---------- 引导 ---------- */
+  .lede { padding-top: 36px; }
+  .lede h1 { max-width: 22ch; font-size: clamp(24px, 3.1vw, 33px); font-weight: 700; letter-spacing: -.012em; line-height: 1.24; }
+  .lede p { margin-top: 14px; max-width: 58ch; font-size: 15px; line-height: 1.66; color: var(--ink-2); }
+
+  /* ---------- 分拣带 ---------- */
+  .sorter { padding: 52px 0 40px; }
+  .belt { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding-top: 12px; }
+  .belt::before {
+    content: ""; position: absolute; top: 0; left: -26px; right: -26px;
+    height: 12px; background: var(--ink);
+  }
+
+  .chute {
+    display: flex; flex-direction: column; gap: 4px;
+    min-height: 124px; padding: 16px 16px 17px;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-top: 7px solid var(--rc, var(--rule));
+    transition: border-color .2s ease, background-color .2s ease, transform .2s ease;
+  }
+  .chute-name { font-size: 16px; font-weight: 600; letter-spacing: -.008em; }
+  .chute-sub { font-family: var(--font-mono); font-size: 11.5px; color: var(--mute); word-break: break-all; }
+  .chute-count { margin-top: auto; display: flex; align-items: baseline; gap: 7px; padding-top: 14px; font-size: 11.5px; color: var(--mute); }
+  .chute-count b { font-family: var(--font-mono); font-size: 21px; font-weight: 500; color: var(--ink); }
+  .chute.is-active { background: #fff; border-color: var(--rc); transform: translateY(-2px); }
+
+  .parcel {
+    position: absolute; top: -42px; left: 0;
+    display: flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px;
+    background: var(--ink);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform .52s cubic-bezier(.4, 0, .2, 1), top .28s ease-out, opacity .28s ease-out;
+  }
+  .parcel i { display: block; width: 10px; height: 10px; background: var(--parcel-color, #fff); }
+
+  /* ---------- 主体 ---------- */
+  .deck { display: grid; grid-template-columns: minmax(0, 1fr) 292px; gap: 30px; align-items: start; padding-bottom: 156px; }
+
+  .section-title {
+    font-size: 12.5px; font-weight: 500; color: var(--mute);
+    padding-bottom: 9px; border-bottom: 1px solid var(--rule); margin-bottom: 22px;
+  }
+
+  .exchange { margin-bottom: 32px; }
+  .ask {
+    padding: 1px 0 1px 14px; margin-bottom: 12px;
+    border-left: 3px solid var(--rc, var(--ink));
+    font-size: 15.5px; font-weight: 500;
+  }
+  .receipt { max-width: 72ch; padding: 15px 17px 16px; background: var(--card); border: 1px solid var(--rule); }
+  .receipt-head {
+    display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline;
+    padding-bottom: 9px; margin-bottom: 12px;
+    border-bottom: 1px dashed var(--rule);
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--mute);
+  }
+  .receipt-head .route { color: var(--rc, var(--ink)); }
+  .receipt-body { font-size: 15px; line-height: 1.68; }
+  .receipt-body + .receipt-body { margin-top: 10px; }
+
+  .callout {
+    margin-top: 13px; padding: 10px 12px;
+    background: var(--paper);
+    border-left: 2px solid var(--rc, var(--ink));
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.65; color: var(--ink-2);
+  }
+  .callout b { display: block; margin-bottom: 3px; font-size: 11px; font-weight: 400; color: var(--mute); }
+
+  .sources { margin-top: 13px; padding-top: 11px; border-top: 1px dashed var(--rule); }
+  .sources summary {
+    display: flex; align-items: center; gap: 7px;
+    font-family: var(--font-mono); font-size: 12px; color: var(--ink-2);
+    cursor: pointer; list-style: none;
+  }
+  .sources summary::-webkit-details-marker { display: none; }
+  .sources summary::before {
+    content: ""; flex: none;
+    border-left: 5px solid var(--rc, var(--ink));
+    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+    transition: transform .18s ease;
+  }
+  .sources[open] summary::before { transform: rotate(90deg); }
+  .sources ul { display: grid; gap: 10px; margin-top: 11px; }
+  .sources li {
+    padding: 10px 12px; background: var(--paper);
+    border-left: 2px solid var(--rc, var(--ink));
+    font-size: 13.5px; line-height: 1.6; color: var(--ink-2);
+  }
+  .sources cite { display: block; margin-top: 6px; font-family: var(--font-mono); font-size: 11px; font-style: normal; color: var(--mute); }
+
+  .exchange[data-route="unknown"] { --rc: var(--route-after); }
+  .exchange[data-route="unknown"] .receipt { background: #FBEFE8; border-color: #E8C4AE; }
+
+  .empty-note { max-width: 56ch; color: var(--ink-2); font-size: 15px; line-height: 1.68; }
+  .empty-note p + p { margin-top: 10px; }
+
+  /* ---------- 轨迹栏 ---------- */
+  .trace { position: sticky; top: 22px; }
+  .trace-block + .trace-block { margin-top: 30px; }
+  .trace .row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 12.5px;
+  }
+  .trace .row dt { color: var(--mute); }
+  .trace .row dd { font-family: var(--font-mono); font-size: 11.5px; text-align: right; word-break: break-all; }
+
+  .calls li {
+    display: flex; justify-content: space-between; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid var(--rule);
+    font-family: var(--font-mono); font-size: 12px; color: var(--ink-2);
+  }
+  .calls li span { color: var(--mute); }
+  .calls .empty { color: var(--mute); justify-content: flex-start; }
+
+  .kb li { display: flex; gap: 9px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+  .kb li::before { content: ""; flex: none; width: 4px; height: 4px; background: var(--route-after); transform: translateY(-2px); }
+
+  /* ---------- 输入区 ---------- */
+  .console {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    background: var(--paper);
+    border-top: 1px solid var(--ink);
+  }
+  .console .shell { padding-block: 13px 15px; }
+  .stack { display: grid; gap: 10px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    padding: 6px 11px;
+    background: var(--card); border: 1px solid var(--rule); border-radius: var(--r-btn);
+    font-size: 12.5px; color: var(--ink-2); white-space: nowrap;
+    transition: border-color .15s ease, color .15s ease;
+  }
+  .chip:hover { border-color: var(--ink); color: var(--ink); }
+
+  .field { display: flex; gap: 10px; }
+  .field input {
+    flex: 1; min-width: 0;
+    padding: 12px 14px;
+    font: inherit; font-size: 15px; color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--ink); border-radius: var(--r-btn);
+  }
+  .field input::placeholder { color: var(--mute); }
+  .field input:focus { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+  .btn-primary {
+    padding: 12px 22px;
+    background: var(--ink); color: var(--card); border-radius: var(--r-btn);
+    font-size: 14.5px; font-weight: 500;
+    transition: background-color .15s ease;
+  }
+  .btn-primary:hover { background: #31353C; }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* ---------- 一次编排好的入场 ---------- */
+  @keyframes chute-in { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+  @keyframes receipt-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+  .chute { animation: chute-in .46s ease-out backwards; }
+  .chute:nth-child(2) { animation-delay: .06s; }
+  .chute:nth-child(3) { animation-delay: .12s; }
+  .chute:nth-child(4) { animation-delay: .18s; }
+  .exchange.is-new .receipt { animation: receipt-in .34s ease-out backwards; }
+
+  /* ---------- 响应式 ---------- */
+  @media (max-width: 1080px) {
+    .deck { grid-template-columns: minmax(0, 1fr); }
+    .trace { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 26px; }
+    .trace-block + .trace-block { margin-top: 0; }
+  }
+
+  @media (max-width: 760px) {
+    .shell { padding-inline: 16px; }
+    .belt { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .belt::before { left: -16px; right: -16px; }
+    .sorter { padding-top: 46px; }
+    .chute { min-height: 96px; }
+    .receipt { max-width: none; }
+    .deck { padding-bottom: 192px; }
+    .meta { font-size: 11px; gap: 4px 14px; }
+    .chute { min-height: 108px; padding: 14px 14px 15px; }
+    .chute-name { font-size: 15px; }
+  }
+
+  @media (max-width: 600px) {
+    .chips { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+    .chips::-webkit-scrollbar { display: none; }
+    .btn-primary { padding: 12px 17px; }
+    .trace { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header class="manifest">
+  <div class="shell">
+    <div class="brand">
+      <strong>Ecommerce Assistant</strong>
+      <span>跨境电商客服助手</span>
+    </div>
+    <div class="meta">
+      <span><b>thread</b>demo-thread-001</span>
+      <span><b>user</b>demo-user-001</span>
+      <span><b>agent</b>ecommerce-assistant</span>
+    </div>
+    <span class="lamp"><i></i>服务在线</span>
+  </div>
+</header>
+
+<div class="shell">
+
+  <section class="lede">
+    <h1>把问题分拣到对的处理链</h1>
+    <p>卖家或客服提交问题后，助手先识别意图，再送到对应链路：售后与商品问题走知识库并附来源，订单、库存、物流走各自的查询工具。</p>
+  </section>
+
+  <section class="sorter" aria-label="路由分拣带">
+    <div class="belt">
+      <article class="chute" data-route="after" style="--rc: var(--route-after)">
+        <p class="chute-name">售后 / 商品</p>
+        <p class="chute-sub">rag_knowledge_base</p>
+        <div class="chute-count"><b data-count="after">1</b><span>次路由</span></div>
+      </article>
+      <article class="chute" data-route="order" style="--rc: var(--route-order)">
+        <p class="chute-name">订单</p>
+        <p class="chute-sub">order_lookup</p>
+        <div class="chute-count"><b data-count="order">1</b><span>次路由</span></div>
+      </article>
+      <article class="chute" data-route="stock" style="--rc: var(--route-stock)">
+        <p class="chute-name">库存</p>
+        <p class="chute-sub">stock_lookup</p>
+        <div class="chute-count"><b data-count="stock">0</b><span>次路由</span></div>
+      </article>
+      <article class="chute" data-route="ship" style="--rc: var(--route-ship)">
+        <p class="chute-name">物流</p>
+        <p class="chute-sub">shipping_lookup</p>
+        <div class="chute-count"><b data-count="ship">0</b><span>次路由</span></div>
+      </article>
+      <div class="parcel" id="parcel" aria-hidden="true"><i></i></div>
+    </div>
+  </section>
+
+  <div class="deck">
+
+    <section class="thread" id="thread" aria-live="polite" aria-label="对话记录">
+      <h2 class="section-title">对话记录</h2>
+
+      <article class="exchange" data-route="after" style="--rc: var(--route-after)">
+        <p class="ask">退货需要满足什么条件？</p>
+        <div class="receipt">
+          <div class="receipt-head">
+            <span class="route">售后 / 商品 · rag_knowledge_base</span>
+            <span>run_7f2c41</span>
+          </div>
+          <p class="receipt-body">退货需要同时满足三个条件：签收后 30 天内提出申请；商品未使用，吊牌、配件与原始包装完整；不属于定制类或贴身类商品。</p>
+          <p class="receipt-body">审核通过后 3 个工作日内发起退款。</p>
+          <details class="sources" open>
+            <summary>来源 1 条 · return_policy.md</summary>
+            <ul>
+              <li>
+                退货申请须在签收后 30 日内提交，且商品需保持未使用状态，吊牌、配件及原始包装完整。定制类、贴身类商品不支持无理由退货。
+                <cite>data/return_policy.md · 占位文本，待替换</cite>
+              </li>
+            </ul>
+          </details>
+        </div>
+      </article>
+
+      <article class="exchange" data-route="order" style="--rc: var(--route-order)">
+        <p class="ask">订单 1001 现在到哪里了？</p>
+        <div class="receipt">
+          <div class="receipt-head">
+            <span class="route">订单 · order_lookup</span>
+            <span>run_8c1b03</span>
+          </div>
+          <p class="receipt-body">订单 1001 当前正在运输中。</p>
+          <div class="callout">
+            <b>调用的工具</b>
+            order_lookup(order_id="1001")
+          </div>
+        </div>
+      </article>
+
+      <article class="exchange" data-route="unknown">
+        <p class="ask">今天深圳的天气怎么样？</p>
+        <div class="receipt">
+          <div class="receipt-head">
+            <span class="route">未识别 · 兜底回复</span>
+            <span>run_9d2a75</span>
+          </div>
+          <p class="receipt-body">这个问题不在售后、订单、库存、物流的处理范围内，没有调用任何工具。</p>
+          <p class="receipt-body">可以换个问法，例如：退货要满足什么条件、订单 1001 的状态、SKU-001 还有多少库存、订单 1001 用了哪家物流。</p>
+        </div>
+      </article>
+    </section>
+
+    <aside class="trace" aria-label="会话轨迹">
+      <div class="trace-block">
+        <h2 class="section-title">本次会话</h2>
+        <dl>
+          <div class="row"><dt>最新 run_id</dt><dd id="trace-run">run_9d2a75</dd></div>
+          <div class="row"><dt>已路由</dt><dd id="trace-routed">2</dd></div>
+          <div class="row"><dt>知识库命中</dt><dd id="trace-hit">1</dd></div>
+        </dl>
+      </div>
+
+      <div class="trace-block">
+        <h2 class="section-title">已调用的工具</h2>
+        <ul class="calls" id="call-list">
+          <li><code>order_lookup</code><span>1 次</span></li>
+        </ul>
+      </div>
+
+      <div class="trace-block">
+        <h2 class="section-title">知识库</h2>
+        <ul class="kb">
+          <li>return_policy.md</li>
+          <li>shipping_policy.md</li>
+        </ul>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<form class="console" id="console">
+  <div class="shell stack">
+    <div class="chips">
+      <button type="button" class="chip" data-q="退货需要满足什么条件？">退货需要满足什么条件？</button>
+      <button type="button" class="chip" data-q="订单 1001 现在到哪里了？">订单 1001 现在到哪里了？</button>
+      <button type="button" class="chip" data-q="商品 SKU-001 还有库存吗？">商品 SKU-001 还有库存吗？</button>
+      <button type="button" class="chip" data-q="订单 1001 使用了什么物流？">订单 1001 使用了什么物流？</button>
+    </div>
+    <div class="field">
+      <label class="sr-only" for="input">提问</label>
+      <input id="input" type="text" autocomplete="off" placeholder="问一句售后、订单、库存或物流的问题" />
+      <button class="btn-primary" id="send" type="submit">发送</button>
+    </div>
+  </div>
+</form>
+
+<script>
+(function () {
+  "use strict";
+
+  /* 接入真实后端：把 API_BASE 指向 FastAPI 服务，例如 "http://localhost:8084"。
+     留空时使用页面内置的演示数据，页面可脱离后端直接预览。 */
+  var API_BASE = "";
+  var THREAD_ID = "demo-thread-001";
+  var USER_ID = "demo-user-001";
+
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+
+  // 顺序即优先级：物流问题里常带「订单」二字，所以先判物流。
+  var ROUTES = [
+    { key: "ship",  color: "#8F6410", label: "物流 · shipping_lookup", tool: "shipping_lookup",
+      match: /物流|快递|承运|发货|运单|签收|DHL|UPS|FedEx|顺丰/i },
+    { key: "stock", color: "#3F6B3A", label: "库存 · stock_lookup", tool: "stock_lookup",
+      match: /库存|SKU/i },
+    { key: "after", color: "#C4400C", label: "售后 / 商品 · rag_knowledge_base", tool: null,
+      match: /退货|退款|售后|换货|保修|发票|政策|质量|尺码/ },
+    { key: "order", color: "#2F4BC4", label: "订单 · order_lookup", tool: "order_lookup",
+      match: /订单|order/i }
+  ];
+
+  // route 枚举与 PRD v0.2 6.7.1 一致；unknown 即兜底回复，不调用任何工具
+  var UNKNOWN = { key: "unknown", color: "#C4400C", label: "未识别 · 兜底回复", tool: null };
+
+  var counters = { after: 1, order: 1, stock: 0, ship: 0 };
+  var tools = { order_lookup: 1 };
+  var routed = 2;
+  var hits = 1;
+
+  var thread = document.getElementById("thread");
+  var cons = document.getElementById("console");
+  var input = document.getElementById("input");
+  var sendBtn = document.getElementById("send");
+  var parcel = document.getElementById("parcel");
+  var beltRectEl = document.querySelector(".belt");
+
+  function pick(text) {
+    for (var i = 0; i < ROUTES.length; i++) {
+      if (ROUTES[i].match.test(text)) return ROUTES[i];
+    }
+    return UNKNOWN;
+  }
+
+  function runId() {
+    return "run_" + Math.random().toString(16).slice(2, 8);
+  }
+
+  function extractOrder(text) {
+    var m = text.match(/(\d{3,})/);
+    return m ? m[1] : null;
+  }
+
+  function extractSku(text) {
+    var m = text.match(/SKU[\s-]*(\w+)/i);
+    return m ? m[1].toUpperCase() : null;
+  }
+
+  /* 本地演示回答。返回结构严格对齐 PRD v0.2 6.7.1 的 ChatMessage，
+     以便与后端返回的真实响应共用同一套渲染逻辑。 */
+  function compose(text, r) {
+    var msg = {
+      type: "ai",
+      content: "",
+      route: r.key,
+      tool_calls: [],
+      sources: [],
+      run_id: runId()
+    };
+
+    if (r.key === "unknown") {
+      msg.content = [
+        "这个问题不在售后、订单、库存、物流的处理范围内，没有调用任何工具。",
+        "可以换个问法，例如：退货要满足什么条件、订单 1001 的状态、SKU-001 还有多少库存、订单 1001 用了哪家物流。"
+      ].join("\n\n");
+      return msg;
+    }
+
+    if (r.key === "ship") {
+      var oid = extractOrder(text);
+      if (!oid) {
+        msg.content = "查询物流需要订单号。把订单号一起发过来，例如「订单 1001 使用了什么物流？」。";
+        return msg;
+      }
+      msg.content = "订单 " + oid + " 由 DHL 承运，运单号 1024-8891-3370，最近一次扫描为「已离开分拣中心」，预计 2 个工作日送达。";
+      msg.tool_calls = [{ name: "shipping_lookup", args: { order_id: oid } }];
+      return msg;
+    }
+
+    if (r.key === "stock") {
+      var sku = extractSku(text);
+      if (!sku) {
+        msg.content = "查询库存需要 SKU 编码。把 SKU 一起发过来，例如「商品 SKU-001 还有库存吗？」。";
+        return msg;
+      }
+      msg.tool_calls = [{ name: "stock_lookup", args: { sku: "SKU-" + sku } }];
+      msg.content = sku === "999"
+        ? "没有找到 SKU-" + sku + " 的库存记录。核对 SKU 编码后可以再问一次。"
+        : "SKU-" + sku + " 当前可用库存 128 件。";
+      return msg;
+    }
+
+    if (r.key === "order") {
+      var o = extractOrder(text);
+      if (!o) {
+        msg.content = "查询订单需要订单号。把订单号一起发过来，例如「订单 1001 现在到哪里了？」。";
+        return msg;
+      }
+      msg.content = "订单 " + o + " 当前正在运输中。";
+      msg.tool_calls = [{ name: "order_lookup", args: { order_id: o } }];
+      return msg;
+    }
+
+    msg.content = [
+      "知识库检索到与退货条件相关的条款，要点如下。",
+      "退货需要同时满足三个条件：签收后 30 天内提出申请；商品未使用，吊牌、配件与原始包装完整；不属于定制类或贴身类商品。"
+    ].join("\n\n");
+    msg.sources = [{
+      doc: "data/return_policy.md",
+      snippet: "退货申请须在签收后 30 日内提交，且商品需保持未使用状态，吊牌、配件及原始包装完整。定制类、贴身类商品不支持无理由退货。",
+      placeholder: true
+    }];
+    return msg;
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function routeOf(key) {
+    if (key === "unknown") return UNKNOWN;
+    for (var i = 0; i < ROUTES.length; i++) {
+      if (ROUTES[i].key === key) return ROUTES[i];
+    }
+    return UNKNOWN;
+  }
+
+  /* 渲染工具调用签名，形如 order_lookup(order_id="1001") */
+  function formatCall(call) {
+    var args = call.args || {};
+    var parts = Object.keys(args).map(function (k) {
+      var v = args[k];
+      return k + "=" + (typeof v === "string" ? '"' + v + '"' : String(v));
+    });
+    return call.name + "(" + parts.join(", ") + ")";
+  }
+
+  function buildExchange(question, msg, labelOverride) {
+    var r = routeOf(msg.route);
+    var ex = el("article", "exchange is-new");
+    ex.dataset.route = msg.route;
+    ex.style.setProperty("--rc", r.color);
+
+    ex.appendChild(el("p", "ask", question));
+
+    var box = el("div", "receipt");
+    var head = el("div", "receipt-head");
+    head.appendChild(el("span", "route", labelOverride || r.label));
+    head.appendChild(el("span", null, msg.run_id));
+    box.appendChild(head);
+
+    msg.content.split("\n\n").forEach(function (t) {
+      if (t.trim()) box.appendChild(el("p", "receipt-body", t));
+    });
+
+    if (msg.tool_calls.length) {
+      var call = el("div", "callout");
+      call.appendChild(el("b", null, "调用的工具"));
+      call.appendChild(document.createTextNode(msg.tool_calls.map(formatCall).join("\n")));
+      box.appendChild(call);
+    }
+
+    if (msg.sources.length) {
+      var base = msg.sources[0].doc.split("/").pop();
+      var det = el("details", "sources");
+      det.open = true;
+      det.appendChild(el("summary", null, "来源 " + msg.sources.length + " 条 · " + base));
+      var ul = el("ul");
+      msg.sources.forEach(function (s) {
+        var li = el("li", null, s.snippet);
+        li.appendChild(el("cite", null, s.doc + (s.placeholder ? " · 占位文本，待替换" : "")));
+        ul.appendChild(li);
+      });
+      det.appendChild(ul);
+      box.appendChild(det);
+    }
+
+    ex.appendChild(box);
+    return ex;
+  }
+
+  function paintChute(key) {
+    var chute = document.querySelector('.chute[data-route="' + key + '"]');
+    if (!chute) return Promise.resolve();
+    chute.classList.add("is-active");
+    var badge = chute.querySelector("[data-count]");
+    badge.textContent = counters[key];
+
+    return sleep(1400).then(function () {
+      chute.classList.remove("is-active");
+      badge.textContent = counters[key];
+    });
+  }
+
+  function deliver(key, color) {
+    if (!parcel) return Promise.resolve();
+    if (reduceMotion) return sleep(120);
+
+    var beltBox = beltRectEl.getBoundingClientRect();
+    var chute = document.querySelector('.chute[data-route="' + key + '"]');
+    var x;
+
+    if (chute) {
+      var box = chute.getBoundingClientRect();
+      x = box.left - beltBox.left + box.width / 2 - 18;
+    } else {
+      // 兜底：没有道口接收，包裹沿传送带走到末端后落下
+      x = beltBox.width - 36;
+    }
+
+    parcel.style.setProperty("--parcel-color", color);
+    parcel.style.transition = "none";
+    parcel.style.transform = "translateX(30px)";
+    parcel.style.top = "-42px";
+    parcel.style.opacity = "1";
+    void parcel.offsetWidth;
+    parcel.style.transition = "";
+
+    return sleep(40)
+      .then(function () {
+        parcel.style.transform = "translateX(" + x + "px)";
+        return sleep(560);
+      })
+      .then(function () {
+        parcel.style.top = "-2px";
+        parcel.style.opacity = "0";
+        return sleep(300);
+      });
+  }
+
+  function syncTrace() {
+    document.getElementById("trace-routed").textContent = routed;
+    document.getElementById("trace-hit").textContent = hits;
+    var list = document.getElementById("call-list");
+    var keys = Object.keys(tools);
+    list.innerHTML = "";
+    if (!keys.length) {
+      var li = el("li", "empty", "本次会话还没有调用工具");
+      list.appendChild(li);
+      return;
+    }
+    keys.forEach(function (k) {
+      var li = el("li");
+      li.appendChild(el("code", null, k));
+      li.appendChild(el("span", null, tools[k] + " 次"));
+      list.appendChild(li);
+    });
+  }
+
+  function scrollToLatest() {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+  }
+
+  function handle(question) {
+    var text = question.trim();
+    if (!text) return;
+
+    sendBtn.disabled = true;
+    input.value = "";
+
+    var r = pick(text);
+    var msg = compose(text, r);
+
+    if (r.key !== "unknown") {
+      counters[r.key] += 1;
+      routed += 1;
+    }
+    msg.tool_calls.forEach(function (c) { tools[c.name] = (tools[c.name] || 0) + 1; });
+    if (msg.sources.length) hits += 1;
+
+    deliver(r.key, r.color)
+      .then(function () { return paintChute(r.key); })
+      .then(function () {
+        thread.appendChild(buildExchange(text, msg));
+        document.getElementById("trace-run").textContent = msg.run_id;
+        syncTrace();
+        scrollToLatest();
+        sendBtn.disabled = false;
+      });
+  }
+
+  /* 后端接入：POST /ecommerce-assistant/invoke 按 PRD v0.2 6.7.1 返回 ChatMessage。
+     启用后由后端决定路由结果，前端只负责呈现。 */
+  function handleViaBackend(text) {
+    return fetch(API_BASE + "/ecommerce-assistant/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, thread_id: THREAD_ID, user_id: USER_ID })
+    }).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function (raw) {
+      // 补齐缺省值，使渲染逻辑与本地演示共用同一条路径
+      return {
+        type: raw.type || "ai",
+        content: raw.content || "",
+        route: raw.route || "unknown",
+        tool_calls: raw.tool_calls || [],
+        sources: raw.sources || [],
+        run_id: raw.run_id || runId()
+      };
+    });
+  }
+
+  cons.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    if (!text) return;
+
+    if (!API_BASE) { handle(text); return; }
+
+    sendBtn.disabled = true;
+    input.value = "";
+    handleViaBackend(text)
+      .then(function (msg) {
+        if (msg.route !== "unknown") {
+          counters[msg.route] = (counters[msg.route] || 0) + 1;
+          routed += 1;
+        }
+        msg.tool_calls.forEach(function (c) { tools[c.name] = (tools[c.name] || 0) + 1; });
+        if (msg.sources.length) hits += 1;
+
+        thread.appendChild(buildExchange(text, msg));
+        document.getElementById("trace-run").textContent = msg.run_id;
+        syncTrace();
+        scrollToLatest();
+      })
+      .catch(function (err) {
+        thread.appendChild(buildExchange(text, {
+          type: "ai",
+          content: "没有连上后端服务。确认 FastAPI 已启动，并且 API_BASE 指向的地址与端口正确（默认 8080）。",
+          route: "unknown",
+          tool_calls: [],
+          sources: [],
+          run_id: "—"
+        }, "连接失败 · " + err.message));
+        scrollToLatest();
+      })
+      .then(function () { sendBtn.disabled = false; });
+  });
+
+  document.querySelector(".chips").addEventListener("click", function (e) {
+    var chip = e.target.closest(".chip");
+    if (chip) handle(chip.dataset.q);
+  });
+
+  /* 空态：访问 index.html#empty 查看新会话尚无对话时的样子（规格见 FRONTEND-SPEC 5.4）。
+     默认预置三组对话，用于展示四种回执形态。 */
+  function initEmpty() {
+    if (window.location.hash !== "#empty") return;
+
+    thread.querySelectorAll(".exchange").forEach(function (n) { n.remove(); });
+
+    var note = el("div", "empty-note");
+    note.appendChild(el("p", null, "问售后政策、订单、库存或物流。"));
+    note.appendChild(el("p", null, "助手会先识别意图，再把问题分拣到对应的处理链；命中知识库的回答会带上来源。"));
+    thread.appendChild(note);
+
+    counters.after = 0;
+    counters.order = 0;
+    counters.stock = 0;
+    counters.ship = 0;
+    document.querySelectorAll("[data-count]").forEach(function (n) { n.textContent = "0"; });
+    routed = 0;
+    hits = 0;
+    tools = {};
+    document.getElementById("trace-run").textContent = "—";
+  }
+
+  initEmpty();
+  syncTrace();
+})();
+</script>
+</body>
+</html>

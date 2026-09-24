@@ -24,30 +24,25 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _reset_demo_tables(conn: sqlite3.Connection) -> None:
-    tables = [
+def _clear_demo_tables(conn: sqlite3.Connection) -> None:
+    """清空业务表与商品/仓库主数据表。
+
+    用 DELETE 而非 DROP TABLE：
+    - DROP 会连带删除表结构与 chat/knowledge 数据，且 CREATE 属于隐式提交，会让
+      「表被清空但新数据尚未写入」的中间态对其他连接可见，正是历史上金额不自洽的成因；
+    - DELETE 是纯 DML，包在单个事务里对其他连接不可见，可彻底消除该窗口。
+    删除顺序按外键依赖反向排列，避免触发 RESTRICT。
+    """
+    for table in (
         "tracking_events",
         "shipments",
         "order_items",
-        "inventory",
         "orders",
-        "chat_messages",
-        "chat_threads",
-        "knowledge_articles",
-    ]
-    for table in tables:
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
-    conn.commit()
-
-
-def _ensure_demo_indexes(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_demo_identity ON order_items(order_id, sku, product_name)"
-    )
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracking_events_demo_identity ON tracking_events(shipment_id, event_time, event_status, location, description)"
-    )
-    conn.commit()
+        "inventory",
+        "products",
+        "warehouses",
+    ):
+        conn.execute(f"DELETE FROM {table}")
 
 
 def _read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -64,8 +59,8 @@ def _upsert_orders(conn: sqlite3.Connection) -> int:
             INSERT OR IGNORE INTO orders (
                 order_id, customer_name_masked, customer_country, order_status,
                 payment_status, fulfillment_status, currency, total_amount,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, is_demo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["order_id"],
@@ -78,10 +73,32 @@ def _upsert_orders(conn: sqlite3.Connection) -> int:
                 float(row["total_amount"]),
                 row["created_at"],
                 row["updated_at"],
+                row.get("is_demo") or "DEMO",
             ),
         )
-    conn.commit()
     return conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+
+
+def _verify_amount_consistency(conn: sqlite3.Connection) -> None:
+    """订单主表金额必须等于明细汇总，否则导入直接失败，避免脏数据进入演示库。"""
+    mismatched = conn.execute(
+        """
+        SELECT o.order_id,
+               o.total_amount AS declared,
+               COALESCE(SUM(i.quantity * i.unit_price), 0) AS computed
+        FROM orders o
+        LEFT JOIN order_items i ON i.order_id = o.order_id
+        GROUP BY o.order_id
+        HAVING ABS(o.total_amount - computed) > 0.01
+        ORDER BY o.order_id
+        """
+    ).fetchall()
+    if mismatched:
+        detail = "；".join(
+            f"{row['order_id']}（主表 {row['declared']:.2f} / 明细 {row['computed']:.2f}）"
+            for row in mismatched
+        )
+        raise ValueError(f"订单总金额与商品明细不一致：{detail}")
 
 
 def _upsert_order_items(conn: sqlite3.Connection) -> int:
@@ -90,8 +107,8 @@ def _upsert_order_items(conn: sqlite3.Connection) -> int:
         conn.execute(
             """
             INSERT OR IGNORE INTO order_items (
-                order_id, sku, product_name, quantity, unit_price, currency
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                order_id, sku, product_name, quantity, unit_price, currency, is_demo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["order_id"],
@@ -100,9 +117,9 @@ def _upsert_order_items(conn: sqlite3.Connection) -> int:
                 int(row["quantity"]),
                 float(row["unit_price"]),
                 row["currency"],
+                row.get("is_demo") or "DEMO",
             ),
         )
-    conn.commit()
     return conn.execute("SELECT COUNT(*) FROM order_items").fetchone()[0]
 
 
@@ -111,10 +128,42 @@ def _upsert_inventory(conn: sqlite3.Connection) -> int:
     for row in rows:
         conn.execute(
             """
+            INSERT INTO products (sku, product_name, updated_at, is_demo)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(sku) DO UPDATE SET
+                product_name = excluded.product_name,
+                updated_at = excluded.updated_at,
+                is_demo = excluded.is_demo
+            """,
+            (
+                row["sku"],
+                row["product_name"],
+                row["updated_at"],
+                row.get("is_demo") or "DEMO",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO warehouses (warehouse_id, warehouse_name, updated_at, is_demo)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(warehouse_id) DO UPDATE SET
+                warehouse_name = excluded.warehouse_name,
+                updated_at = excluded.updated_at,
+                is_demo = excluded.is_demo
+            """,
+            (
+                row["warehouse_id"],
+                row["warehouse_name"],
+                row["updated_at"],
+                row.get("is_demo") or "DEMO",
+            ),
+        )
+        conn.execute(
+            """
             INSERT OR IGNORE INTO inventory (
                 sku, product_name, warehouse_id, warehouse_name,
-                on_hand, reserved, available, safety_stock, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on_hand, reserved, available, safety_stock, status, updated_at, is_demo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["sku"],
@@ -125,10 +174,11 @@ def _upsert_inventory(conn: sqlite3.Connection) -> int:
                 int(row["reserved"]),
                 int(row["available"]),
                 int(row["safety_stock"]),
+                row.get("status") or "normal",
                 row["updated_at"],
+                row.get("is_demo") or "DEMO",
             ),
         )
-    conn.commit()
     return conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0]
 
 
@@ -139,8 +189,8 @@ def _upsert_shipments(conn: sqlite3.Connection) -> int:
             """
             INSERT OR IGNORE INTO shipments (
                 shipment_id, order_id, carrier, tracking_number, shipping_status,
-                shipped_at, estimated_delivery_at, delivered_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                shipped_at, estimated_delivery_at, delivered_at, updated_at, is_demo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["shipment_id"],
@@ -148,13 +198,13 @@ def _upsert_shipments(conn: sqlite3.Connection) -> int:
                 row["carrier"],
                 row["tracking_number"],
                 row["shipping_status"],
-                row["shipped_at"],
+                row["shipped_at"] or None,
                 row["estimated_delivery_at"] or None,
                 row["delivered_at"] or None,
                 row["updated_at"],
+                row.get("is_demo") or "DEMO",
             ),
         )
-    conn.commit()
     return conn.execute("SELECT COUNT(*) FROM shipments").fetchone()[0]
 
 
@@ -164,8 +214,8 @@ def _upsert_tracking_events(conn: sqlite3.Connection) -> int:
         conn.execute(
             """
             INSERT OR IGNORE INTO tracking_events (
-                shipment_id, event_time, event_status, location, description
-            ) VALUES (?, ?, ?, ?, ?)
+                shipment_id, event_time, event_status, location, description, is_demo
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 row["shipment_id"],
@@ -173,9 +223,9 @@ def _upsert_tracking_events(conn: sqlite3.Connection) -> int:
                 row["event_status"],
                 row["location"],
                 row["description"],
+                row.get("is_demo") or "DEMO",
             ),
         )
-    conn.commit()
     return conn.execute("SELECT COUNT(*) FROM tracking_events").fetchone()[0]
 
 
@@ -183,25 +233,36 @@ def initialize_demo_database(*, db_path: str | Path | None = None, reset: bool =
     target = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    # 先建表（独立连接、幂等），避免与下面的写事务抢锁
+    init_db(target)
+
     conn = _connect(target)
     try:
-        if reset:
-            _reset_demo_tables(conn)
-        init_db(target)
-        _ensure_demo_indexes(conn)
+        conn.execute("BEGIN")
+        try:
+            if reset:
+                _clear_demo_tables(conn)
 
-        _upsert_orders(conn)
-        _upsert_order_items(conn)
-        _upsert_inventory(conn)
-        _upsert_shipments(conn)
-        _upsert_tracking_events(conn)
+            _upsert_orders(conn)
+            _upsert_inventory(conn)
+            _upsert_order_items(conn)
+            _verify_amount_consistency(conn)
+            _upsert_shipments(conn)
+            _upsert_tracking_events(conn)
 
-        conn.commit()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
         return {
             "db_path": str(target),
+            "reset": bool(reset),
             "order_count": conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0],
             "order_item_count": conn.execute("SELECT COUNT(*) FROM order_items").fetchone()[0],
             "sku_count": conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0],
+            "product_count": conn.execute("SELECT COUNT(*) FROM products").fetchone()[0],
+            "warehouse_count": conn.execute("SELECT COUNT(*) FROM warehouses").fetchone()[0],
             "shipment_count": conn.execute("SELECT COUNT(*) FROM shipments").fetchone()[0],
             "tracking_event_count": conn.execute("SELECT COUNT(*) FROM tracking_events").fetchone()[0],
         }
@@ -221,9 +282,12 @@ def main() -> None:
 
     summary = initialize_demo_database(db_path=target, reset=args.reset)
     print(f"数据库路径: {summary['db_path']}")
+    print(f"是否重建: {summary['reset']}")
     print(f"订单数量: {summary['order_count']}")
     print(f"商品明细数量: {summary['order_item_count']}")
     print(f"SKU 数量: {summary['sku_count']}")
+    print(f"商品主数据数量: {summary['product_count']}")
+    print(f"仓库主数据数量: {summary['warehouse_count']}")
     print(f"发货记录数量: {summary['shipment_count']}")
     print(f"轨迹数量: {summary['tracking_event_count']}")
 

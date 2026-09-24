@@ -1,23 +1,70 @@
+# 本地一键起三件套：后端 API + Streamlit 工作台 + Web 前端（分拣台）
+#
+#   docker compose up -d --build
+#
+# 三个服务共用同一个镜像（依赖只装一次），入口由各自的 command 覆盖。
+# api 之外的容器不需要密钥，因此 env_file 只挂在 api 上。
+
+name: ecommerce-assistant
+
+x-app: &app
+  build:
+    context: .
+  image: ecommerce-assistant:local
+  restart: unless-stopped
+
 services:
+  # 后端：FastAPI（/invoke、/stream、/models、工作台只读端点）
+  # 首次启动由 lifespan 建库并播种，库文件落在 named volume 里
   api:
-    build: .
-    container_name: ecommerce-assistant-api
+    <<: *app
     command: python src/run_service.py
-    ports:
-      - "8080:8080"
+    env_file:
+      # .env 被 .dockerignore 排除，只能运行期注入；
+      # 尚未创建时不让整个栈起不来，缺失则 LLM 分支降级（工具/知识库分支不受影响）
+      - path: .env
+        required: false
     environment:
       HOST: "0.0.0.0"
-      PORT: "8080"
-    restart: unless-stopped
+      PORT: "8084"
+    ports:
+      - "8084:8084"
+    volumes:
+      - ea-data:/app/data/db
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8084/info', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
+  # Streamlit 工作台：订单 / 库存 / 物流看板 + 带模型选择的对话
   streamlit:
-    build: .
-    container_name: ecommerce-assistant-ui
-    command: streamlit run src/ecommerce_assistant/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    <<: *app
+    command: >
+      streamlit run src/ecommerce_assistant/streamlit_app.py
+      --server.address 0.0.0.0 --server.port 8501 --server.headless true
+    environment:
+      API_BASE_URL: "http://api:8084"
     ports:
       - "8501:8501"
-    environment:
-      API_BASE_URL: "http://api:8080"
     depends_on:
-      - api
-    restart: unless-stopped
+      api:
+        condition: service_healthy
+
+  # Web 前端（分拣台）：纯静态，页面里的 API_BASE 指向宿主的 8084
+  web:
+    <<: *app
+    command: python -m http.server 5500 --directory frontend
+    ports:
+      - "5500:5500"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  ea-data:

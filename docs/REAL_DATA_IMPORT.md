@@ -36,9 +36,16 @@
 
 导入时会执行以下关联检查：
 
+- `inventory.sku` 会同步写入 `products.sku`
+- `inventory.warehouse_id` 会同步写入 `warehouses.warehouse_id`
 - `order_items.order_id` 必须存在于 `orders.order_id`
+- `order_items.sku` 必须存在于 `inventory.sku`
 - `shipments.order_id` 必须存在于 `orders.order_id`
 - `tracking_events.shipment_id` 必须存在于 `shipments.shipment_id`
+
+导入顺序固定为 `orders → products/warehouses（由 inventory 派生）→ inventory → order_items → shipments → tracking_events`。关联既可以来自同批 CSV，也可以引用数据库中已经存在的订单、SKU 或包裹。
+
+当前继续兼容原 `inventory.csv` 格式，不要求额外提供 `products.csv` 或 `warehouses.csv`。商品名和仓库名会写入主数据表；`inventory.product_name`、`inventory.warehouse_name` 暂时保留为兼容快照字段。
 
 ## 事务与幂等行为
 

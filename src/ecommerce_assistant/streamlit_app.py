@@ -1,203 +1,323 @@
 from __future__ import annotations
 
-import html
 import os
-import sqlite3
 import uuid
-from pathlib import Path
 
 import streamlit as st
 
 from ecommerce_assistant.client.client import AgentClient
+from ecommerce_assistant.llm.client import DEFAULT_MODEL
+from ecommerce_assistant.workbench import queries
 
-DB_PATH = Path(os.getenv("ECOMMERCE_DB_PATH", Path(__file__).resolve().parents[2] / "data" / "ecommerce_assistant.db"))
-
-st.set_page_config(page_title="Ecommerce Assistant", page_icon="🛒")
-
-st.markdown(
-    """
-    <style>
-        .stApp {
-            background: linear-gradient(180deg, #f7f7fb 0%, #eef3ff 100%);
-            color: #1f2937;
-        }
-        .main .block-container {
-            max-width: 1100px;
-            padding-top: 2rem;
-            padding-bottom: 2rem;
-        }
-        h1 {
-            font-size: 3rem !important;
-            font-weight: 800;
-            letter-spacing: -0.04em;
-            margin-bottom: 1.5rem !important;
-        }
-        .chat-shell {
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
-            margin-top: 1rem;
-        }
-        .bubble {
-            max-width: 80%;
-            padding: 14px 16px;
-            border-radius: 18px;
-            line-height: 1.6;
-            font-size: 15px;
-            white-space: pre-wrap;
-            word-break: break-word;
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
-        }
-        .bubble.user {
-            align-self: flex-end;
-            background: linear-gradient(135deg, #ddeeff 0%, #cfe1ff 100%);
-            color: #1d3557;
-            border-bottom-right-radius: 6px;
-        }
-        .bubble.assistant {
-            align-self: flex-start;
-            background: linear-gradient(135deg, #ffffff 0%, #f3f4f6 100%);
-            color: #1f2937;
-            border: 1px solid #e5e7eb;
-            border-bottom-left-radius: 6px;
-        }
-        .bubble.error {
-            align-self: flex-start;
-            background: #fff1f2;
-            color: #9f1239;
-            border: 1px solid #fecdd3;
-        }
-        .stChatInput {
-            margin-top: 1rem;
-        }
-        .stChatInput textarea {
-            border-radius: 14px !important;
-            border: 1px solid #dbeafe !important;
-            background: rgba(255,255,255,0.9) !important;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
+st.set_page_config(
+    page_title="电商运营工作台",
+    page_icon=":material/storefront:",
+    layout="wide",
 )
 
-st.title("Ecommerce Assistant")
+title_column, status_column = st.columns([4, 1], vertical_alignment="center")
+with title_column:
+    st.title("电商运营工作台", icon=":material/storefront:")
+    st.caption("统一查看订单、库存与物流动态，并通过 AI 助手快速查询业务数据。")
+with status_column:
+    st.badge("演示数据", icon=":material/science:", color="orange")
+    st.caption(queries.DEMO_NOTICE)
 
+dashboard_summary = queries.dashboard_summary()
+st.caption(f"数据更新时间：{dashboard_summary['data_updated_at'] or '暂无'}")
 
-@st.cache_data
-def _load_demo_overview() -> dict[str, list[dict[str, object]] | dict[str, int]]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        order_rows = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT order_id, customer_name_masked, order_status, payment_status, total_amount
-                FROM orders
-                ORDER BY created_at DESC
-                LIMIT 5
-                """
-            ).fetchall()
-        ]
-        low_stock_rows = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT sku, product_name, available, safety_stock, warehouse_name
-                FROM inventory
-                WHERE available <= safety_stock
-                ORDER BY available ASC
-                LIMIT 5
-                """
-            ).fetchall()
-        ]
-        shipment_rows = [
-            dict(row)
-            for row in conn.execute(
-                """
-                SELECT s.order_id, s.shipment_id, s.carrier, s.shipping_status, s.tracking_number,
-                       COUNT(te.id) AS tracking_count
-                FROM shipments s
-                LEFT JOIN tracking_events te ON te.shipment_id = s.shipment_id
-                GROUP BY s.shipment_id
-                ORDER BY s.updated_at DESC
-                LIMIT 6
-                """
-            ).fetchall()
-        ]
-        summary = {
-            "order_total": conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0],
-            "sku_total": conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0],
-            "shipment_total": conn.execute("SELECT COUNT(*) FROM shipments").fetchone()[0],
-            "low_stock_total": conn.execute("SELECT COUNT(*) FROM inventory WHERE available <= safety_stock").fetchone()[0],
+with st.container(horizontal=True, wrap=True):
+    st.metric(
+        "今日订单",
+        dashboard_summary["today_order_count"],
+        icon=":material/receipt_long:",
+        border=True,
+        help="今天创建的订单数量",
+    )
+    st.metric(
+        "待处理订单",
+        dashboard_summary["pending_order_count"],
+        icon=":material/pending_actions:",
+        border=True,
+        help="待付款、已付款或处理中的订单",
+    )
+    st.metric(
+        "待发货订单",
+        dashboard_summary["pending_shipping_order_count"],
+        icon=":material/inventory_2:",
+        border=True,
+        help="已付款或处理中的订单",
+    )
+    st.metric(
+        "运输中包裹",
+        dashboard_summary["in_transit_shipment_count"],
+        icon=":material/local_shipping:",
+        border=True,
+        help="运输中或派送中的包裹",
+    )
+    st.metric(
+        "库存预警",
+        dashboard_summary["low_stock_sku_count"],
+        icon=":material/warning:",
+        border=True,
+        help="库存不足或缺货的 SKU",
+    )
+    st.metric(
+        "物流异常",
+        dashboard_summary["shipment_exception_count"],
+        icon=":material/report_problem:",
+        border=True,
+        help="当前状态为物流异常的包裹",
+    )
+
+with st.container(border=True):
+    section_title, section_link = st.columns([4, 1], vertical_alignment="center")
+    with section_title:
+        st.subheader("最近订单", icon=":material/receipt_long:")
+        st.caption("按下单时间展示最近 5 条订单")
+    with section_link:
+        st.page_link(
+            "pages/1_订单管理.py",
+            label="查看全部订单",
+            icon=":material/arrow_forward:",
+            width="stretch",
+        )
+
+    recent_orders = [
+        {
+            "订单号": row["order_id"],
+            "客户": row["customer_name_masked"],
+            "地区": row["country_label"],
+            "订单状态": row["order_status_label"],
+            "付款状态": row["payment_status_label"],
+            "金额": float(row["total_amount"] or 0),
+            "下单时间": row["created_at"],
         }
-        return {"summary": summary, "orders": order_rows, "low_stock": low_stock_rows, "shipments": shipment_rows}
-    finally:
-        conn.close()
+        for row in dashboard_summary["recent_orders"]
+    ]
+    if recent_orders:
+        st.dataframe(
+            recent_orders,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "订单号": st.column_config.TextColumn("订单号", pinned=True),
+                "金额": st.column_config.NumberColumn("金额", format="%.2f"),
+                "下单时间": st.column_config.DatetimeColumn(
+                    "下单时间", format="YYYY-MM-DD HH:mm"
+                ),
+            },
+        )
+    else:
+        st.info("暂无订单记录。", icon=":material/info:")
 
+alert_column, logistics_column = st.columns(2)
+with alert_column:
+    with st.container(border=True, height="stretch"):
+        st.subheader("库存预警", icon=":material/warning:")
+        st.caption(f"需要关注的 SKU：{dashboard_summary['low_stock_sku_count']} 个")
+        inventory_alerts = [
+            {
+                "SKU": row["sku"],
+                "商品": row["product_name"],
+                "仓库": row["warehouse_name"],
+                "可售": row["available"],
+                "安全库存": row["safety_stock"],
+                "状态": row["status_label"],
+            }
+            for row in dashboard_summary["inventory_alerts"]
+        ]
+        if inventory_alerts:
+            st.dataframe(
+                inventory_alerts,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "SKU": st.column_config.TextColumn("SKU", pinned=True),
+                    "可售": st.column_config.NumberColumn("可售", format="%d"),
+                    "安全库存": st.column_config.NumberColumn("安全库存", format="%d"),
+                },
+            )
+        else:
+            st.success("当前没有库存预警。", icon=":material/check_circle:")
+        st.page_link(
+            "pages/2_库存看板.py",
+            label="打开库存看板",
+            icon=":material/arrow_forward:",
+        )
 
-overview = _load_demo_overview()
-summary = overview["summary"]
+with logistics_column:
+    with st.container(border=True, height="stretch"):
+        st.subheader("物流异常", icon=":material/report_problem:")
+        st.caption(f"异常包裹：{dashboard_summary['shipment_exception_count']} 个")
+        shipment_alerts = [
+            {
+                "包裹号": row["shipment_id"],
+                "订单号": row["order_id"],
+                "承运商": row["carrier"],
+                "状态": row["shipping_status_label"],
+                "更新时间": row["updated_at"],
+            }
+            for row in dashboard_summary["shipment_alerts"]
+        ]
+        if shipment_alerts:
+            st.dataframe(
+                shipment_alerts,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "包裹号": st.column_config.TextColumn("包裹号", pinned=True),
+                    "更新时间": st.column_config.DatetimeColumn(
+                        "更新时间", format="YYYY-MM-DD HH:mm"
+                    ),
+                },
+            )
+        else:
+            st.success("当前没有物流异常。", icon=":material/check_circle:")
+        st.page_link(
+            "pages/3_物流跟踪.py",
+            label="打开物流跟踪",
+            icon=":material/arrow_forward:",
+        )
 
-st.subheader("演示数据版订单 / 库存 / 物流概览")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("订单总数", summary["order_total"])
-col2.metric("SKU 总数", summary["sku_total"])
-col3.metric("发货记录", summary["shipment_total"])
-col4.metric("库存预警", summary["low_stock_total"])
+st.header("AI 业务助手", icon=":material/smart_toy:")
+st.caption("订单、库存和物流问题使用确定性数据库查询；售后政策与通用问题才会使用模型。")
 
-st.write("以下为固定演示数据，明确标注为演示数据，不代表真实平台或真实物流。")
-
-with st.container():
-    st.subheader("最近订单")
-    st.dataframe(overview["orders"], use_container_width=True)
-
-with st.container():
-    st.subheader("库存预警")
-    st.dataframe(overview["low_stock"], use_container_width=True)
-
-with st.container():
-    st.subheader("物流状态")
-    st.dataframe(overview["shipments"], use_container_width=True)
-
-client = AgentClient(os.getenv("API_BASE_URL") or "http://localhost:8082")
+client = AgentClient(os.getenv("API_BASE_URL") or "http://localhost:8084")
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = f"streamlit-{uuid.uuid4().hex[:8]}"
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-chat_container = st.container()
-with chat_container:
-    st.markdown('<div class="chat-shell">', unsafe_allow_html=True)
-    for message in st.session_state.messages:
-        role = message["role"]
-        content = html.escape(message["content"])
-        if role == "user":
-            bubble_class = "bubble user"
-        elif role == "assistant":
-            bubble_class = "bubble assistant"
-        else:
-            bubble_class = "bubble error"
-        st.markdown(f'<div class="{bubble_class}">{content}</div>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+MODEL_INTENTS = {"llm", "rag"}
 
-prompt = st.chat_input("请输入问题（可使用 emoji ✨📦🚚）")
+
+def _load_models(include_remote: bool) -> tuple[list[str], str, bool]:
+    """返回 (候选模型清单, 默认模型, 是否成功合并中转站清单)。
+
+    后端不可达时回退到内置默认模型，页面不会因为模型清单拉取失败而白屏。
+    """
+    try:
+        payload = client.list_models(include_remote=include_remote)
+    except Exception:
+        return [DEFAULT_MODEL], DEFAULT_MODEL, False
+
+    options = list(payload.get("models") or [DEFAULT_MODEL])
+    default_model = payload.get("default") or options[0]
+    return options, default_model, payload.get("source") == "merged"
+
+
+if "model_options" not in st.session_state:
+    options, default_model, _ = _load_models(False)
+    st.session_state.model_options = options
+    st.session_state.default_model = default_model
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = (
+        st.session_state.default_model
+        if st.session_state.default_model in st.session_state.model_options
+        else st.session_state.model_options[0]
+    )
+
+with st.container(border=True):
+    model_column, action_column = st.columns([4, 1], vertical_alignment="bottom")
+    with model_column:
+        model_options = st.session_state.model_options
+        st.session_state.selected_model = st.selectbox(
+            "回复模型",
+            options=model_options,
+            index=(
+                model_options.index(st.session_state.selected_model)
+                if st.session_state.selected_model in model_options
+                else 0
+            ),
+            help="只影响售后政策和通用问答；业务数据查询不经过模型。",
+        )
+    with action_column:
+        if st.button(
+            "同步模型列表",
+            icon=":material/sync:",
+            width="stretch",
+        ):
+            options, default_model, remote_ok = _load_models(True)
+            st.session_state.model_options = options
+            st.session_state.default_model = default_model
+            st.session_state.remote_hint = (
+                f"已合并中转站模型清单，共 {len(options)} 个可选模型。"
+                if remote_ok
+                else "中转站模型清单拉取失败，已沿用 .env 中配置的候选清单。"
+            )
+            st.rerun()
+
+    if st.session_state.get("remote_hint"):
+        st.caption(st.session_state.remote_hint)
+
+with st.container(border=True):
+    if not st.session_state.messages:
+        st.info(
+            "你可以查询订单状态、库存余量、物流轨迹，也可以咨询退换货和配送政策。",
+            icon=":material/tips_and_updates:",
+        )
+
+    for message in st.session_state.messages:
+        role = message["role"] if message["role"] in {"user", "assistant"} else "assistant"
+        avatar = ":material/person:" if role == "user" else ":material/smart_toy:"
+        with st.chat_message(role, avatar=avatar):
+            if role == "assistant" and message.get("intent"):
+                if message["intent"] in MODEL_INTENTS:
+                    st.caption(f"模型回复 · {message.get('model') or '默认模型'}")
+                else:
+                    st.caption("业务工具查询 · 未使用模型")
+            if message["role"] == "error":
+                st.error(message["content"], icon=":material/error:")
+            else:
+                st.markdown(message["content"])
+            if role == "assistant" and message.get("sources"):
+                with st.expander(
+                    f"查看 {len(message['sources'])} 条来源",
+                    icon=":material/library_books:",
+                ):
+                    for source in message["sources"]:
+                        st.markdown(f"**{source.get('doc') or '未命名来源'}**")
+                        st.caption(str(source.get("snippet") or ""))
+                        if source.get("placeholder"):
+                            st.badge("占位内容", color="orange")
+
+prompt = st.chat_input(
+    "例如：订单 1005 的物流到哪里了？",
+    submit_mode="disable",
+)
 if prompt:
+    used_model = st.session_state.selected_model
     st.session_state.messages.append({"role": "user", "content": prompt})
     try:
-        result = client.invoke(prompt, thread_id=st.session_state.thread_id, user_id="streamlit-user")
+        result = client.invoke(
+            prompt,
+            thread_id=st.session_state.thread_id,
+            user_id="streamlit-user",
+            model=used_model,
+        )
         answer = result.get("content", "")
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+                "model": used_model,
+                "intent": result.get("intent"),
+                "sources": result.get("sources") or [],
+            }
+        )
     except Exception as exc:  # pragma: no cover - UI fallback
-        error_text = f"请求失败: {exc}"
-        st.session_state.messages.append({"role": "assistant", "content": error_text})
+        error_text = f"请求失败：{exc}"
+        st.session_state.messages.append({"role": "error", "content": error_text})
 
     st.rerun()
 
-if st.button("查看服务信息"):
-    try:
-        info = client.get_info()
-        st.json(info)
-    except Exception as exc:  # pragma: no cover - UI fallback
-        st.error(f"无法获取服务信息: {exc}")
+with st.expander("服务诊断", icon=":material/settings:"):
+    st.caption("仅用于检查后端服务、模型候选清单和 API 地址。")
+    if st.button("获取服务信息", icon=":material/monitor_heart:"):
+        try:
+            info = client.get_info()
+            st.json(info)
+        except Exception as exc:  # pragma: no cover - UI fallback
+            st.error(f"无法获取服务信息：{exc}", icon=":material/error:")

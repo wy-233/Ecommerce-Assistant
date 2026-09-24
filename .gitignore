@@ -5,6 +5,11 @@ data/real/
 exports/
 customer_data/
 
+# Local agent state, backups, and disposable verification environments
+.workbuddy/
+_dockersim/
+scripts/_*.py
+
 # Python
 __pycache__/
 *.py[cod]

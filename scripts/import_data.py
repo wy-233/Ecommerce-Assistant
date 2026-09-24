@@ -160,7 +160,13 @@ def _validate_order_row(row: dict[str, Any], file_name: str, row_number: int) ->
             raise _field_error(file_name, row_number, f"日期格式非法: {field}={row[field]}")
 
 
-def _validate_order_item_row(row: dict[str, Any], file_name: str, row_number: int, order_ids: set[str]) -> None:
+def _validate_order_item_row(
+    row: dict[str, Any],
+    file_name: str,
+    row_number: int,
+    order_ids: set[str],
+    skus: set[str],
+) -> None:
     required = ["order_id", "sku", "product_name", "quantity", "unit_price", "currency"]
     _ensure_required_fields(row, required, file_name, row_number)
     _validate_sensitive_fields(row, file_name, row_number)
@@ -168,6 +174,8 @@ def _validate_order_item_row(row: dict[str, Any], file_name: str, row_number: in
         raise _field_error(file_name, row_number, f"订单关联不存在: order_id={row['order_id']}")
     if not re.fullmatch(r"[A-Za-z0-9\-_.]+", row["sku"]):
         raise _field_error(file_name, row_number, f"SKU格式非法: {row['sku']}")
+    if row["sku"] not in skus:
+        raise _field_error(file_name, row_number, f"SKU关联不存在: sku={row['sku']}")
     if not _is_positive_int(row["quantity"]):
         raise _field_error(file_name, row_number, f"数量字段必须为合法整数: {row['quantity']}")
     if not _is_numeric(row["unit_price"]):
@@ -267,6 +275,26 @@ def _upsert_order_item(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
 
 
 def _upsert_inventory(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO products (sku, product_name, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(sku) DO UPDATE SET
+            product_name = excluded.product_name,
+            updated_at = excluded.updated_at
+        """,
+        (row["sku"], row["product_name"], row["updated_at"]),
+    )
+    conn.execute(
+        """
+        INSERT INTO warehouses (warehouse_id, warehouse_name, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(warehouse_id) DO UPDATE SET
+            warehouse_name = excluded.warehouse_name,
+            updated_at = excluded.updated_at
+        """,
+        (row["warehouse_id"], row["warehouse_name"], row["updated_at"]),
+    )
     conn.execute(
         """
         INSERT INTO inventory (
@@ -388,32 +416,58 @@ def import_csv_files(
     if all(path is None for path in (orders_path, order_items_path, inventory_path, shipments_path, tracking_events_path)):
         raise ValueError("至少需要提供一份 CSV 文件")
 
+    with sqlite3.connect(str(target)) as validation_conn:
+        existing_orders, existing_skus, existing_shipments, _ = _populate_unique_sets(validation_conn)
+
     orders = _read_and_validate(orders_path or "", validator=_validate_order_row, file_label=Path(orders_path or "orders.csv").name) if orders_path else []
-    order_items = _read_and_validate(order_items_path or "", validator=_validate_order_item_row, file_label=Path(order_items_path or "order_items.csv").name, context={"order_ids": set(row["order_id"] for row in orders)}) if order_items_path else []
     inventory = _read_and_validate(inventory_path or "", validator=_validate_inventory_row, file_label=Path(inventory_path or "inventory.csv").name) if inventory_path else []
-    shipments = _read_and_validate(shipments_path or "", validator=_validate_shipment_row, file_label=Path(shipments_path or "shipments.csv").name, context={"order_ids": set(row["order_id"] for row in orders)}) if shipments_path else []
-    tracking_events = _read_and_validate(tracking_events_path or "", validator=_validate_tracking_event_row, file_label=Path(tracking_events_path or "tracking_events.csv").name, context={"shipment_ids": set(row["shipment_id"] for row in shipments)}) if tracking_events_path else []
+    known_order_ids = existing_orders | {row["order_id"] for row in orders}
+    known_skus = existing_skus | {row["sku"] for row in inventory}
+    order_items = _read_and_validate(
+        order_items_path or "",
+        validator=_validate_order_item_row,
+        file_label=Path(order_items_path or "order_items.csv").name,
+        context={"order_ids": known_order_ids, "skus": known_skus},
+    ) if order_items_path else []
+    shipments = _read_and_validate(
+        shipments_path or "",
+        validator=_validate_shipment_row,
+        file_label=Path(shipments_path or "shipments.csv").name,
+        context={"order_ids": known_order_ids},
+    ) if shipments_path else []
+    known_shipment_ids = existing_shipments | {row["shipment_id"] for row in shipments}
+    tracking_events = _read_and_validate(
+        tracking_events_path or "",
+        validator=_validate_tracking_event_row,
+        file_label=Path(tracking_events_path or "tracking_events.csv").name,
+        context={"shipment_ids": known_shipment_ids},
+    ) if tracking_events_path else []
 
     if dry_run:
+        product_count = len({row["sku"] for row in inventory})
+        warehouse_count = len({row["warehouse_id"] for row in inventory})
         return {
             "dry_run": True,
             "orders_imported": len(orders),
             "order_items_imported": len(order_items),
             "inventory_imported": len(inventory),
+            "products_upserted": product_count,
+            "warehouses_upserted": warehouse_count,
             "shipments_imported": len(shipments),
             "tracking_events_imported": len(tracking_events),
         }
 
-    with sqlite3.connect(str(target)) as conn:
+    conn = sqlite3.connect(str(target))
+    try:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("BEGIN")
         try:
             for row in orders:
                 _upsert_order(conn, row)
-            for row in order_items:
-                _upsert_order_item(conn, row)
             for row in inventory:
                 _upsert_inventory(conn, row)
+            for row in order_items:
+                _upsert_order_item(conn, row)
             for row in shipments:
                 _upsert_shipment(conn, row)
             for row in tracking_events:
@@ -422,12 +476,17 @@ def import_csv_files(
         except Exception:
             conn.rollback()
             raise
+    finally:
+        # `with sqlite3.connect(...)` 只提交/回滚事务、不关闭连接，必须显式 close。
+        conn.close()
 
     return {
         "dry_run": False,
         "orders_imported": len(orders),
         "order_items_imported": len(order_items),
         "inventory_imported": len(inventory),
+        "products_upserted": len({row["sku"] for row in inventory}),
+        "warehouses_upserted": len({row["warehouse_id"] for row in inventory}),
         "shipments_imported": len(shipments),
         "tracking_events_imported": len(tracking_events),
     }
