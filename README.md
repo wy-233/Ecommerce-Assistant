@@ -1,8 +1,24 @@
 # Ecommerce Assistant
 基于 Python、FastAPI、LangGraph 和 Streamlit 实现的跨境电商 AI 助手，支持售后知识库问答、订单查询、库存查询和物流查询。
 
-## 1. 最小功能
-第一阶段只实现：
+仓库地址：<https://github.com/wy-233/Ecommerce-Assistant>
+
+## 当前状态
+
+截至 2026-09-26，第一阶段 MVP 的核心链路已经完成：
+
+- FastAPI、Streamlit 工作台和独立 Web 前端均可运行；
+- Agent、API 和工作台复用 `tools/database.py` 的统一业务查询层；
+- 订单、库存和物流数据由 SQLite 确定性查询，不允许模型猜测业务数据；
+- 商品与仓库主数据、SKU 引用约束、数据库迁移和知识文章检索已经落地；
+- Dashboard 与库存看板已完成可视化优化；
+- 全量测试基线为 `203 passed`，原 Starlette / AnyIO 弃用 warning 已消除。
+
+当前仍属于演示型 MVP：默认使用 Demo 数据，尚未提供完整用户登录、API 鉴权、调用限流和生产级 Demo/Real 数据隔离。接入真实订单数据或公开部署前，请先完成这些安全能力。
+
+## 1. 核心功能
+
+当前实现的查询链路：
 
 ```
 用户问题
@@ -19,8 +35,26 @@
 - 退款和改地址；
 - 多 Agent；
 - 用户登录；
-- 复杂前端；
 - 模型训练。
+
+### 运营工作台
+
+Streamlit 工作台包括：
+
+- 首页运营指标、最近订单、库存预警和物流异常；
+- 订单管理：订单筛选、订单商品和多包裹信息；
+- 库存看板：SKU、商品名称、仓库和库存状态筛选；
+- 可售库存与安全库存阈值图：红色表示缺货、橙色表示库存不足、绿色表示正常，深灰短线表示安全库存线；
+- 物流跟踪：按状态和关键字筛选，并按时间顺序展示轨迹；
+- AI 助手：模型选择、原生对话界面、工具调用和知识来源展示。
+
+库存状态统一使用以下规则：
+
+| 条件 | 状态码 | 展示名 |
+| --- | --- | --- |
+| `available <= 0` | `out_of_stock` | 缺货 |
+| `available <= safety_stock` | `low_stock` | 库存不足 |
+| `available > safety_stock` | `normal` | 正常 |
 
 ## 2. 技术栈
 
@@ -125,14 +159,20 @@ OPENAI_MODEL=gpt-5.6-sol
 
 ## 5. 安装依赖
 
-```
-uv sync
-```
-如果项目使用锁文件：
+获取代码：
 
+```powershell
+git clone https://github.com/wy-233/Ecommerce-Assistant.git
+Set-Location Ecommerce-Assistant
 ```
+
+安装依赖：
+
+```powershell
 uv sync --frozen
 ```
+
+如果尚未安装 `uv`，请先按 [uv 官方安装说明](https://docs.astral.sh/uv/getting-started/installation/)完成安装。
 
 ### 初始化数据库
 
@@ -215,9 +255,13 @@ uv run streamlit run src/ecommerce_assistant/streamlit_app.py
 http://localhost:8501
 ```
 
+工作台首页会显示 6 个核心指标，并提供订单管理、库存看板和物流跟踪三个子页面入口。库存看板中的彩色横条表示可售库存，深灰短线表示安全库存阈值；风险 SKU 会按“缺货 → 库存不足 → 正常”排序。
+
 ## 8. Docker 本地部署
 
 一次起齐三个服务：后端 API（8084）、Streamlit 工作台（8501）、Web 前端分拣台（5500）。
+
+> 当前 `docker-compose.yml` 定位为**本地开发与演示配置**，会将 8084、8501、5500 三个端口发布到宿主机，且 `ea-data` 目前只挂载到 API 容器。初始 Demo 数据虽然一致，但运行后修改数据时，Streamlit 的直接查询可能与 API 数据分叉，因此不应原样用于公网生产环境。生产配置必须让 API 与 Streamlit 挂载同一个数据库卷，并增加 HTTPS 反向代理，只暴露 80/443。
 
 ### 8.1 前置
 
@@ -248,7 +292,7 @@ docker compose up -d --build
 docker compose ps                  # 状态与健康检查
 docker compose logs -f api         # 跟后端日志
 docker compose down                # 停止并删容器（数据卷保留）
-docker compose down -v             # 连数据卷一起删，下次启动重新播种
+docker compose down -v             # 危险：连数据卷一起删除，下次启动重新播种
 docker compose up -d --build api   # 只重建后端
 ```
 
@@ -260,7 +304,7 @@ docker compose up -d --build api   # 只重建后端
 | 依赖源 | 默认走阿里云 PyPI 镜像，可用 `--build-arg PYPI_MIRROR=...` 覆盖 | 容器出网会经过 Docker Desktop 配的系统代理，拉 pypi.org 实测只有 ~65 KB/s；国内镜像直连实测 ~346 KB/s（约 5 倍）。清华 / 中科大镜像对 `uv` 的 wheel 返回 403，未采用 |
 | 镜像分层 | 先复制 `pyproject.toml` / `uv.lock` 装依赖，再复制源码 | 改源码不必重装依赖 |
 | 密钥 | `.env` 进 `.dockerignore`，仅由 `env_file` 运行期注入，且只挂 `api` | 密钥不进镜像层；看板与静态页容器不需要它 |
-| 数据库 | named volume `ea-data` 挂 `/app/data/db`，用 `ECOMMERCE_DB_PATH` 指过去 | 若直接挂 `/app/data`，会连镜像里的 `data/demo/*.csv`（播种源）一起遮住 |
+| 数据库 | API 使用 named volume `ea-data` 挂 `/app/data/db`，用 `ECOMMERCE_DB_PATH` 指过去 | 当前是本地演示配置；生产环境还需将同一 volume 挂到 Streamlit。若直接挂 `/app/data`，会连镜像里的 `data/demo/*.csv`（播种源）一起遮住 |
 | 容器用户 | 非 root（uid 10001） | 卷属主在镜像里就交给它，容器内可写 |
 | 启动顺序 | `api` 带 healthcheck，另两个用 `depends_on: service_healthy` | 否则看板先起来会连不上后端 |
 | 建库播种 | 由 FastAPI lifespan 在容器首次启动时完成 | 镜像里不带 `.db`，避免把本机状态带进容器 |
@@ -268,7 +312,29 @@ docker compose up -d --build api   # 只重建后端
 
 `frontend/index.html` 里的 `API_BASE` 写的是 `http://localhost:8084`，对应宿主发布端口；改宿主端口时同步改这个常量。
 
-### 8.5 与不用 Docker 的关系
+### 8.5 公网部署边界
+
+推荐的公网结构是：
+
+```text
+用户浏览器
+  → Caddy / Nginx（域名、HTTPS、访问保护）
+  → Streamlit
+  → FastAPI
+  → SQLite 持久化卷
+```
+
+上线前至少确认：
+
+1. 只有反向代理发布 80/443，8084、8501、5500 不直接暴露公网；
+2. API 与 Streamlit 指向同一数据库文件并挂载同一持久化卷；
+3. `.env` 仅保存在服务器，不进入 Git 或镜像；
+4. 增加登录或 Basic Auth、API 限流和模型调用额度保护；
+5. 建立 SQLite 自动备份和恢复验证；
+6. 只展示 Demo 数据，或者完成 Demo/Real 隔离和真实数据授权；
+7. 独立 Web 前端的 `API_BASE` 改为公网 HTTPS API 地址，不能继续使用 `localhost`。
+
+### 8.6 与不用 Docker 的关系
 
 Docker 只是把第 5～7 节的步骤容器化，两边行为一致。本机已装 uv 时，直接按第 5～7 节跑更快；要一次性拉起三个服务或给别人复现，用 Docker。
 
@@ -421,7 +487,19 @@ data: [DONE]
 当前全量回归基线：
 
 ```text
-199 passed
+203 passed
+```
+
+运行全量测试：
+
+```powershell
+uv run pytest -q
+```
+
+仅验证 Streamlit 页面：
+
+```powershell
+uv run pytest tests/test_streamlit_app.py -q
 ```
 
 ## 12. 最小调用链
@@ -460,4 +538,4 @@ ChatMessage
 → Web 前端
 → 测试和 Docker
 ```
-第一版只要这条链路跑通，就已经具备一个可演示的 AI 应用开发项目。
+当前版本已经跑通这条链路，并完成统一业务查询层、数据库约束、工作台同源查询和主要页面可视化；后续重点是生产部署安全、Demo/Real 隔离以及真实业务系统接入。
