@@ -21,6 +21,9 @@ pythonpath = [".", "src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
+[tool.vercel]
+entrypoint = "src.ecommerce_assistant.api.service:app"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/ecommerce_assistant"]
 

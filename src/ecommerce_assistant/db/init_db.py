@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -8,7 +9,11 @@ from typing import Any, Iterator
 # 本文件位于 src/ecommerce_assistant/db/，需上溯 4 层才是项目根，
 # 否则会解析到 src/data/ 并脚本（data/）各写一个库，造成数据分裂。
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_DB_PATH = _PROJECT_ROOT / "data" / "ecommerce_assistant.db"
+DEFAULT_DB_PATH = (
+    Path("/tmp/ecommerce_assistant.db")
+    if os.getenv("VERCEL")
+    else _PROJECT_ROOT / "data" / "ecommerce_assistant.db"
+)
 
 MASTER_DATA_TABLES = ("products", "warehouses")
 BUSINESS_TABLES = ("orders", "order_items", "inventory", "shipments", "tracking_events")
