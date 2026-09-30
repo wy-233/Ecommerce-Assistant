@@ -784,18 +784,89 @@
     return commit(text, compose(text, r));
   }
 
-  /* 接入后端：POST /ecommerce-assistant/invoke 按 PRD v0.2 6.7.1 返回 ChatMessage，
-     route 一律以后端结论为准，前端只负责呈现。 */
-  function submitRemote(text) {
-    return fetch(API_BASE + "/ecommerce-assistant/invoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, thread_id: THREAD_ID, user_id: USER_ID })
-    }).then(function (res) {
+  /* POST SSE 的 data 帧可能跨网络 chunk，先拼完整帧再解析。 */
+  async function submitRemote(question) {
+    var message = normalizeMessage({ run_id: "—" });
+    var exchange = null;
+    var buffer = "";
+    var done = false;
+    var connected = false;
+
+    function render(label) {
+      var updated = buildExchange(question, message, label || null, !exchange);
+      if (exchange) exchange.replaceWith(updated);
+      else {
+        thread.querySelectorAll(".empty-note").forEach(function (n) { n.remove(); });
+        thread.appendChild(updated);
+      }
+      exchange = updated;
+      scrollToLatest();
+    }
+
+    function consumeFrame(frame) {
+      var data = frame.split(/\r?\n/).filter(function (line) {
+        return line.startsWith("data:");
+      }).map(function (line) { return line.slice(5).trimStart(); }).join("\n");
+      if (!data) return;
+      if (data === "[DONE]") { done = true; return; }
+      var event = JSON.parse(data);
+      if (event.type === "error") throw new Error(event.message || "流式查询失败");
+      if (event.type === "start") message.run_id = event.run_id || message.run_id;
+      if (event.type === "route") {
+        message.route = event.route || "unknown";
+        deliver(message.route, ROUTE_COLOR[message.route] || ROUTE_COLOR.unknown)
+          .then(function () { return paintChute(message.route); });
+      }
+      if (event.type === "tool_call") {
+        message.tool_calls.push({ name: event.name, args: event.args || {} });
+      }
+      if (event.type === "sources") message.sources = event.sources || [];
+      if (event.type === "token") message.content += event.content || "";
+      render("查询中");
+    }
+
+    try {
+      var res = await fetch(API_BASE + "/ecommerce-assistant/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: question, thread_id: THREAD_ID, user_id: USER_ID })
+      });
+      connected = true;
       if (!res.ok) throw new Error("HTTP " + res.status);
+      if (!res.body) throw new Error("浏览器不支持读取流式响应");
       setLamp(true);
-      return res.json();
-    }).then(normalizeMessage);
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      try {
+        while (!done) {
+          var chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          var boundary;
+          while ((boundary = buffer.search(/\r?\n\r?\n/)) !== -1) {
+            var match = buffer.slice(boundary).match(/^\r?\n\r?\n/)[0];
+            var frame = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + match.length);
+            consumeFrame(frame);
+            if (done) break;
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      if (!done) throw new Error("流式响应提前结束，未收到 [DONE]");
+      render();
+      exchanges.push({ question: question, message: message });
+      syncAll();
+    } catch (err) {
+      setLamp(connected);
+      message.content += (message.content ? "\n\n" : "") + "请求失败：" + err.message
+        + (exchange ? "。已显示收到的部分内容。" : connected
+          ? "。请检查后端日志。" : "。请确认 FastAPI 已启动且 API_BASE 地址正确。");
+      render("查询失败");
+      exchanges.push({ question: question, message: message });
+      syncAll();
+    }
   }
 
   function setLamp(online) {
@@ -807,30 +878,13 @@
   /* 唯一的提问入口：表单提交与快捷问题共用，保证两条路径行为一致 */
   function ask(text) {
     var question = (text || "").trim();
-    if (!question) return;
+    if (!question || sendBtn.disabled) return;
 
     sendBtn.disabled = true;
     input.value = "";
 
     var request = API_BASE ? submitRemote(question) : submitLocal(question);
-
-    request
-      .then(function (msg) { return commit(question, msg); })
-      .catch(function (err) {
-        setLamp(false);
-        // 后端不可达：按兜底形态追加一条回执，说明排查方向（FRONTEND-SPEC §5.1）
-        return commit(
-          question,
-          normalizeMessage({
-            content: "没有连上后端服务。确认 FastAPI 已启动（在项目根运行 `python src/run_service.py`），并且本页 API_BASE 指向的地址与端口正确："
-              + API_BASE + "。",
-            route: "unknown",
-            run_id: "—"
-          }),
-          "连接失败 · " + err.message
-        );
-      })
-      .then(function () { sendBtn.disabled = false; });
+    request.finally(function () { sendBtn.disabled = false; });
   }
 
   cons.addEventListener("submit", function (e) {

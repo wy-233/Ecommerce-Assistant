@@ -290,21 +290,42 @@ prompt = st.chat_input(
 if prompt:
     used_model = st.session_state.selected_model
     st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user", avatar=":material/person:"):
+        st.markdown(prompt)
     try:
-        result = client.invoke(
-            prompt,
-            thread_id=st.session_state.thread_id,
-            user_id="streamlit-user",
-            model=used_model,
-        )
-        answer = result.get("content", "")
+        details = {"route": None, "sources": [], "tool_calls": []}
+
+        def answer_tokens():
+            for event in client.stream(
+                prompt,
+                thread_id=st.session_state.thread_id,
+                user_id="streamlit-user",
+                model=used_model,
+            ):
+                kind = event.get("type")
+                if kind == "route":
+                    details["route"] = event.get("route")
+                elif kind == "tool_call":
+                    details["tool_calls"].append(
+                        {"name": event.get("name"), "args": event.get("args") or {}}
+                    )
+                elif kind == "sources":
+                    details["sources"] = event.get("sources") or []
+                elif kind == "token":
+                    yield event.get("content", "")
+
+        with st.chat_message("assistant", avatar=":material/smart_toy:"):
+            answer = st.write_stream(answer_tokens())
+        route = details["route"]
+        intent = "rag" if details["sources"] else "llm" if route == "after" else route
         st.session_state.messages.append(
             {
                 "role": "assistant",
                 "content": answer,
                 "model": used_model,
-                "intent": result.get("intent"),
-                "sources": result.get("sources") or [],
+                "intent": intent,
+                "sources": details["sources"],
+                "tool_calls": details["tool_calls"],
             }
         )
     except Exception as exc:  # pragma: no cover - UI fallback

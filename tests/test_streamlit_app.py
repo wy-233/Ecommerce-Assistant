@@ -4,6 +4,8 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
+from ecommerce_assistant.client.client import AgentClient
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = PROJECT_ROOT / "src/ecommerce_assistant/streamlit_app.py"
@@ -35,6 +37,23 @@ def test_streamlit_dashboard_uses_native_components_instead_of_css_theme_hacks()
     assert "<style>" not in source
     assert "st.chat_message" in source
     assert "st.metric(" in source
+
+
+def test_streamlit_chat_consumes_sse_and_shows_answer(monkeypatch):
+    def fake_stream(self, message, **kwargs):
+        assert message == "订单 1001 的状态"
+        yield {"type": "start", "run_id": "run_test"}
+        yield {"type": "route", "route": "order"}
+        yield {"type": "tool_call", "name": "order_lookup", "args": {"order_id": "1001"}}
+        yield {"type": "token", "content": "订单 1001 "}
+        yield {"type": "token", "content": "已发货"}
+
+    monkeypatch.setattr(AgentClient, "stream", fake_stream)
+    app = AppTest.from_file(APP_PATH, default_timeout=20).run()
+    app.chat_input[0].set_value("订单 1001 的状态").run()
+
+    assert not app.exception
+    assert any("订单 1001 已发货" in item.value for item in app.markdown)
 
 
 def test_inventory_dashboard_renders_inventory_comparison_without_error():

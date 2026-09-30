@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+from collections.abc import Iterator
 
 import httpx
 
@@ -47,3 +49,42 @@ class AgentClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def stream(
+        self,
+        message: str,
+        thread_id: str = "demo-thread",
+        user_id: str = "demo-user",
+        model: str | None = None,
+    ) -> Iterator[dict]:
+        payload = {"message": message, "thread_id": thread_id, "user_id": user_id}
+        if model:
+            payload["model"] = model
+
+        with httpx.stream(
+            "POST",
+            f"{self.base_url}/ecommerce-assistant/stream",
+            json=payload,
+            timeout=60,
+        ) as response:
+            response.raise_for_status()
+            data_lines: list[str] = []
+            done = False
+            for line in response.iter_lines():
+                if line:
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip(" "))
+                    continue
+                if not data_lines:
+                    continue
+                data = "\n".join(data_lines)
+                data_lines.clear()
+                if data == "[DONE]":
+                    done = True
+                    break
+                event = json.loads(data)
+                if event.get("type") == "error":
+                    raise RuntimeError(event.get("message") or "流式查询失败")
+                yield event
+            if not done:
+                raise RuntimeError("流式响应提前结束，未收到 [DONE]")
