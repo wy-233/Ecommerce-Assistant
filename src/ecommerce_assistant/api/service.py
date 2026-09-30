@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,6 +12,11 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+
+# Vercel 直接加载本文件时不会把 src 布局加入模块搜索路径。
+_SRC_ROOT = str(Path(__file__).resolve().parents[2])
+if _SRC_ROOT not in sys.path:
+    sys.path.insert(0, _SRC_ROOT)
 
 from ecommerce_assistant.agents.ecommerce_assistant import build_graph
 from ecommerce_assistant.db.chat_dao import ChatThreadDAO
